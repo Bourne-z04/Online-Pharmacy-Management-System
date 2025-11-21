@@ -1,0 +1,124 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: online-market-backend
+  
+  # 数据源配置
+  datasource:
+    type: com.alibaba.druid.pool.DruidDataSource
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/pharmacy_online_market?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: root
+    druid:
+      initial-size: 5
+      min-idle: 5
+      max-active: 20
+      max-wait: 60000
+      test-while-idle: true
+      test-on-borrow: false
+      test-on-return: false
+      validation-query: SELECT 1
+      time-between-eviction-runs-millis: 60000
+      min-evictable-idle-time-millis: 300000
+  
+  # Redis配置
+  redis:
+    host: localhost
+    port: 6379
+    password: 
+    database: 0
+    timeout: 5000ms
+    lettuce:
+      pool:
+        max-active: 8
+        max-wait: -1ms
+        max-idle: 8
+        min-idle: 0
+  
+  # 文件上传配置
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 10MB
+      max-request-size: 20MB
+
+# MyBatis Plus配置
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  mapper-locations: classpath*:/mapper/**/*.xml
+
+# JWT配置
+jwt:
+  secret: baihuikang-pharmacy-online-market-secret-key-2024
+  expiration: 604800000  # 7天，单位毫秒
+
+# 微信小程序配置
+wechat:
+  miniapp:
+    app-id: your-miniapp-appid
+    secret: your-miniapp-secret
+  pay:
+    app-id: your-pay-appid
+    mch-id: your-mch-id
+    mch-key: your-mch-key
+    key-path: classpath:cert/apiclient_cert.p12
+    notify-url: https://your-domain.com/api/payment/notify
+
+# 阿里云OSS配置
+aliyun:
+  oss:
+    endpoint: oss-cn-hangzhou.aliyuncs.com
+    access-key-id: your-access-key-id
+    access-key-secret: your-access-key-secret
+    bucket-name: pharmacy-online-market
+    url-prefix: https://pharmacy-online-market.oss-cn-hangzhou.aliyuncs.com/
+
+# 业务配置
+business:
+  # 地址上限
+  address:
+    max-count: 20
+  # 购物车配置
+  cart:
+    max-quantity: 99
+  # 订单配置
+  order:
+    payment-timeout: 7200  # 支付超时时间，秒
+    auto-confirm-days: 7   # 自动确认收货天数
+  # 售后配置
+  after-sale:
+    auto-agree-hours: 48   # 超时自动同意退货，小时
+    max-images: 3          # 最多上传图片数
+    max-image-size: 5242880  # 单张图片最大5MB
+  # 处方配置
+  prescription:
+    consultation-timeout: 600  # 问诊超时10分钟，秒
+    prescription-timeout: 300  # 开方超时5分钟，秒
+    max-evidence-images: 5     # 最多上传5张复诊凭证
+    max-image-size: 5242880    # 单张图片最大5MB
+
+# 日志配置
+logging:
+  level:
+    com.pharmacy: debug
+    org.springframework: info
+  pattern:
+    console: '%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n'
+  file:
+    name: logs/online-market.log
+    max-size: 100MB
+    max-history: 30
+
