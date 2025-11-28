@@ -1,0 +1,453 @@
+一、子系统一：订单结算与订单处理子系统
+1. 模块职责与边界
+核心职责：负责C端用户从订单确认到支付完成的全流程处理，以及B端工作人员对订单的发货、售后等管理工作。本模块是交易闭环的核心，需确保数据一致性、支付安全性与库存准确性。
+模块边界：
+输入：购物车商品数据、用户地址信息、配送方式选择、支付指令、发货指令、售后申请
+输出：订单快照、支付流水、库存锁定指令、物流推送任务、售后处理结果
+依赖：用户管理模块（获取地址）、商品模块（获取价格与库存）、支付平台接口、物流配送接口
+2. 类图设计
+classDiagram
+    class OrderSettlementController {
+        -SettlementService settlementService
+        -PaymentService paymentService
+        +initiateSettlement(cartItems: List~CartItem~, userId: String): SettlementPageDTO
+        +selectAddress(addressId: String, orderId: String): AddressDTO
+        +selectDeliveryMethod(method: DeliveryMethod, orderId: String): DeliveryOptionDTO
+        +confirmOrder(orderRequest: OrderRequest): OrderDTO
+        +cancelOrder(orderId: String): CancelResultDTO
+    }
+
+    class SettlementService {
+        -OrderRepository orderRepository
+        -InventoryService inventoryService
+        -PromotionEngine promotionEngine
+        +generateOrderDraft(cartItems: List~CartItem~, userId: String): OrderDraftDTO
+        +calculateAmount(orderId: String): AmountDetailDTO
+        +validateBeforePayment(orderId: String): ValidationResult
+        +lockInventory(orderId: String): LockResult
+        +releaseInventoryOnTimeout(orderId: String): void
+    }
+
+    class PaymentService {
+        -WeChatPayClient weChatPayClient
+        -PaymentRepository paymentRepository
+        +createPaymentOrder(orderId: String, amount: BigDecimal): PaymentDTO
+        +processCallback(notification: PayNotification): CallbackResult
+        +queryPaymentStatus(paymentId: String): PaymentStatus
+        +initiateRefund(refundRequest: RefundRequest): RefundResult
+    }
+
+    class OrderRepository {
+        +insertOrder(order: Order): void
+        +updateOrderStatus(orderId: String, status: OrderStatus): void
+        +findOrderById(orderId: String): Order
+        +findOrdersByUserAndStatus(userId: String, status: OrderStatus): List~Order~
+        +updateAddress(orderId: String, addressSnapshot: AddressSnapshot): void
+        +updateDeliveryOption(orderId: String, delivery: DeliveryOption): void
+    }
+
+    class InventoryService {
+        -InventoryRepository inventoryRepository
+        +checkStockAvailability(productId: String, quantity: int): StockCheckResult
+        +deductStock(orderItems: List~OrderItem~, orderId: String): DeductionResult
+        +compensateStock(orderId: String): void
+        +freezeStock(productId: String, quantity: int): void
+        -optimisticLockCheck(productId: String, version: int): boolean
+    }
+
+    class BOrderProcessController {
+        -OrderProcessService processService
+        +listOrders(filter: OrderFilter): List~OrderSummaryDTO~
+        +shipOrder(shipCommand: ShipCommand): ShipResultDTO
+        +processAfterSale(auditCommand: AfterSaleAuditCommand): AuditResultDTO
+        +exportOrders(filter: OrderFilter): FileDTO
+    }
+
+    class OrderProcessService {
+        -LogisticsService logisticsService
+        -AfterSaleService afterSaleService
+        +confirmShip(orderId: String, deliveryPlatform: String): LogisticsOrder
+        +auditAfterSale(afterSaleId: String, decision: AuditDecision): AfterSaleStatus
+        +autoAgreeAfterSaleOnTimeout(): void
+        +generateShipNotification(orderId: String): void
+    }
+
+    class LogisticsService {
+        -WeChatInstantDeliveryClient deliveryClient
+        +createDeliveryOrder(order: Order, platform: String): DeliveryResult
+        +syncDeliveryStatus(deliveryId: String): DeliveryStatus
+        +handleCallback(callbackData: CallbackData): void
+    }
+
+    class AfterSaleService {
+        -RefundService refundService
+        +validateAfterSaleEligibility(orderId: String): ValidationResult
+        +processAgree(afterSaleId: String): RefundOrder
+        +processReject(afterSaleId: String, reason: String): RejectResult
+        +updateAfterSaleStatus(afterSaleId: String, status: AfterSaleStatus): void
+    }
+
+    class Order {
+        -String orderId
+        -String userId
+        -OrderType orderType
+        -OrderStatus status
+        -List~OrderItem~ items
+        -AddressSnapshot addressSnapshot
+        -DeliveryOption deliveryOption
+        -PaymentInfo paymentInfo
+        -String prescriptionId
+        -LocalDateTime createTime
+        -Map~String, LocalDateTime~ statusTimeline
+        +calculateTotalAmount(): BigDecimal
+        +changeStatus(newStatus: OrderStatus): void
+        +isCancellable(): boolean
+    }
+
+    class OrderItem {
+        -String itemId
+        -String productId
+        -String productName
+        -String specification
+        -BigDecimal unitPrice
+        -int quantity
+        -BigDecimal subtotal
+        -boolean isPrescription
+    }
+
+    class AmountDetailDTO {
+        -BigDecimal productTotal
+        -BigDecimal freight
+        -BigDecimal discount
+        -BigDecimal payableAmount
+        -List~PromotionDetail~ promotionDetails
+    }
+
+    OrderSettlementController --> SettlementService
+    OrderSettlementController --> PaymentService
+    SettlementService --> OrderRepository
+    SettlementService --> InventoryService
+    SettlementService --> PromotionEngine
+    PaymentService --> WeChatPayClient
+    PaymentService --> PaymentRepository
+    BOrderProcessController --> OrderProcessService
+    OrderProcessService --> LogisticsService
+    OrderProcessService --> AfterSaleService
+    LogisticsService --> WeChatInstantDeliveryClient
+    AfterSaleService --> RefundService
+    Order "1" --> "*" OrderItem
+    SettlementService --> "1" Order
+
+3. 核心类详细设计
+3.1 Order（订单核心实体）
+属性设计：
+orderId: String类型，采用"BD" + 年份 + 8位随机数，全局唯一
+status: OrderStatus枚举，状态机包含CREATING、PAYING、PAID、SHIPPING、RECEIVED、COMPLETED、CANCELLED、AFTER_SALE
+statusTimeline: Map<String, LocalDateTime>，记录每个状态变更时间点，用于超时判定
+addressSnapshot: AddressSnapshot值对象，存储结算时地址快照，避免后续地址修改影响历史订单
+关键方法：
+changeStatus(newStatus): 状态转换时校验转换合法性，更新状态时间线，若新状态为PAYING则启动支付定时器
+isCancellable(): 仅当状态为CREATING或PAYING时允许取消，已支付订单需走售后流程
+calculateTotalAmount(): 遍历items计算商品总价，调用运费规则引擎，应用促销策略，返回最终应付金额
+3.2 SettlementService（结算业务服务）
+核心算法 - 金额计算：
+算法：lockInventory(orderId)
+输入：订单ID
+处理：
+  1. 加载订单明细，按productId分组统计总数量
+  2. 对每组库存执行：
+     a. SELECT available_stock, version FROM inventory WHERE product_id = ?
+     b. IF available_stock < required_quantity THEN 抛出异常
+     c. UPDATE inventory SET available_stock = available_stock - quantity, 
+        frozen_stock = frozen_stock + quantity, version = version + 1
+        WHERE product_id = ? AND version = ?
+     d. 若更新行数为0，则重试，最多3次
+  3. 重试3次失败抛出ConcurrencyException
+  4. 记录库存冻结流水，关联orderId
+输出：LockResult（成功/失败明细）
+异常处理：捕获异常后调用compensateLockedInventory回滚已冻结库存
+
+4. 接口设计
+4.1 内部接口
+SettlementService接口
+public interface SettlementService {
+    // 生成订单草稿
+    OrderDraftDTO generateOrderDraft(List<CartItem> cartItems, String userId) 
+        throws CartEmptyException, ProductInvalidException;
+    
+    // 计算金额明细
+    AmountDetailDTO calculateAmount(String orderId) 
+        throws OrderNotFoundException;
+    
+    // 支付前校验
+    ValidationResult validateBeforePayment(String orderId);
+    
+    // 锁定库存
+    LockResult lockInventory(String orderId) 
+        throws InsufficientStockException, ConcurrencyException;
+    
+    // 超时释放库存
+    void releaseInventoryOnTimeout(String orderId);
+}
+
+PaymentService接口
+public interface PaymentService {
+    // 创建支付订单
+    PaymentDTO createPaymentOrder(String orderId, BigDecimal amount);
+    
+    // 处理支付回调
+    CallbackResult processCallback(PayNotification notification);
+    
+    // 轮询支付状态
+    PaymentStatus queryPaymentStatus(String paymentId);
+    
+    // 发起退款
+    RefundResult initiateRefund(RefundRequest request);
+}
+
+4.2 外部接口调用
+微信支付接口
+统一下单接口：POST https://api.mch.weixin.qq.com/pay/unifiedorder
+参数：appid, mch_id, nonce_str, sign, body, out_trade_no, total_fee, spbill_create_ip, notify_url, trade_type
+返回：prepay_id, code_url
+查询订单接口：GET https://api.mch.weixin.qq.com/pay/orderquery
+退款接口：POST https://api.mch.weixin.qq.com/secapi/pay/refund
+微信即时配送接口
+创建配送订单：POST https://api.weixin.qq.com/urban/delivery/create
+参数：shopid, shop_order_id, shop_no, delivery_token, receiver_name, receiver_phone, receiver_address, cargo_weight, expected_delivery_time
+返回：delivery_id, waybill_id, delivery_fee
+
+5. 异常处理机制
+异常场景	检测方式	处理策略	日志记录	用户提示
+库存不足	乐观锁更新返回0行	终止订单创建，回滚已冻结库存	ERROR级别，记录productId与需求量	"商品库存不足，请调整数量"
+支付超时	定时任务扫描status=PAYING且createTime超2小时	自动关闭订单，调用releaseInventoryOnTimeout	WARN级别，记录orderId	"支付超时，订单已关闭"
+重复支付	支付流水号唯一索引冲突	拒绝二次扣款，原路退回多余款项	FATAL级别，触发告警	"订单已支付，请勿重复操作"
+配送API失败	捕获HTTP异常或返回码非200	重试3次，仍失败转人工介入模式	ERROR级别，记录异常详情	"配送平台对接失败，请联系客服"
+售后状态非法	审核时校验订单状态非FINISHED	拒绝申请，返回错误码	INFO级别，记录非法操作尝试	"当前订单状态不支持售后"
+
+二、子系统二：处方服务子系统
+1. 模块职责与边界
+核心职责：为处方药购买提供完整的在线问诊与处方开具闭环，包括患者信息采集、医生匹配、图文问诊、处方生成与审核。需确保医疗合规性、数据隐私性与问诊实时性。
+模块边界：
+输入：患者基本信息、病情描述、复诊凭证图片、用户协议确认
+输出：问诊会话、处方图片、审核意见、处方状态
+依赖：用户管理模块（实名认证）、互联网医院接口、文件存储服务
+
+2. 类图设计
+classDiagram
+    class PrescriptionController {
+        -PatientInfoService patientInfoService
+        -ConsultationService consultationService
+        +submitPatientInfo(patientDTO: PatientInfoDTO): SubmitResult
+        +startConsultation(patientId: String): ConsultationSessionDTO
+        +uploadEvidence(patientId: String, files: MultipartFile[]): UploadResult
+        +getPrescriptionStatus(orderId: String): PrescriptionStatusDTO
+    }
+
+    class PatientInfoService {
+        -PatientRepository patientRepository
+        -IdCardValidator idCardValidator
+        +createPatientInfo(userId: String, info: PatientInfoDTO): Patient
+        +validateIdCard(idCard: String): ValidationResult
+        +validateWeight(weight: BigDecimal): ValidationResult
+        +saveEvidence(patientId: String, evidenceUrls: List~String~): void
+        +confirmAgreement(patientId: String): void
+    }
+
+    class ConsultationService {
+        -DoctorMatchingEngine doctorMatchingEngine
+        -ConsultationSessionRepository sessionRepository
+        -PrescriptionService prescriptionService
+        +matchDoctor(patientInfo: Patient, department: String): Doctor
+        +createSession(patientId: String, doctorId: String): ConsultationSession
+        +sendMessage(sessionId: String, message: ChatMessage): void
+        +endSession(sessionId: String): void
+        +handleDoctorOffline(doctorId: String): QueueInfo
+    }
+
+    class DoctorMatchingEngine {
+        -DoctorRepository doctorRepository
+        +findAvailableDoctor(department: String, patientId: String): Doctor
+        +calculateQueueTime(doctorId: String, patientPosition: int): Duration
+        +getDepartmentList(): List~Department~
+    }
+
+    class PrescriptionService {
+        -PrescriptionRepository prescriptionRepository
+        -InternetHospitalClient hospitalClient
+        +requestPrescription(sessionId: String): void
+        +receivePrescription(prescriptionImageUrl: String, auditOpinion: String): Prescription
+        +storePrescription(prescription: Prescription): void
+        +pushToOrder(orderId: String, prescriptionId: String): void
+        +handlePrescriptionTimeout(sessionId: String): void
+    }
+
+    class ConsultationSession {
+        -String sessionId
+        -String patientId
+        -String doctorId
+        -SessionStatus status
+        -LocalDateTime startTime
+        -LocalDateTime endTime
+        -List~ChatMessage~ messages
+        -Timer timer
+        +addMessage(message: ChatMessage): void
+        +startConsultationTimer(): void
+        +forceEndSession(): void
+        +isTimeout(): boolean
+    }
+
+    class ChatMessage {
+        -String messageId
+        -String senderId
+        -MessageType type
+        -String content
+        -LocalDateTime timestamp
+        -boolean isPersisted
+        +persist(): void
+    }
+
+    class Prescription {
+        -String prescriptionId
+        -String orderId
+        -String patientId
+        -String doctorId
+        -String imageUrl
+        -String auditOpinion
+        -PrescriptionStatus status
+        -LocalDateTime issuedTime
+        +validate(): ValidationResult
+    }
+
+    class TimerManager {
+        -Map~String, Timer~ sessionTimers
+        -Map~String, Timer~ prescriptionTimers
+        +startConsultationTimer(sessionId: String, timeout: Duration): void
+        +startPrescriptionTimer(sessionId: String, timeout: Duration): void
+        +cancelTimer(id: String): void
+        +onTimeout(id: String, callback: Runnable): void
+    }
+
+    class FileStorageService {
+        +upload(file: MultipartFile, folder: String): String
+        +validateImage(file: MultipartFile): ValidationResult
+        +delete(url: String): void
+    }
+
+    PrescriptionController --> PatientInfoService
+    PrescriptionController --> ConsultationService
+    PatientInfoService --> PatientRepository
+    PatientInfoService --> IdCardValidator
+    ConsultationService --> DoctorMatchingEngine
+    ConsultationService --> ConsultationSessionRepository
+    ConsultationService --> PrescriptionService
+    DoctorMatchingEngine --> DoctorRepository
+    PrescriptionService --> PrescriptionRepository
+    PrescriptionService --> InternetHospitalClient
+    ConsultationSession "1" --> "*" ChatMessage
+    PrescriptionService --> "1" Prescription
+    TimerManager --> ConsultationSession : controls
+    TimerManager --> Prescription : controls
+    PatientInfoService --> FileStorageService
+
+3. 核心类详细设计
+3.1 ConsultationSession（问诊会话实体）
+状态管理：
+status: SessionStatus枚举 {WAITING, CONSULTING, FINISHED, TIMEOUT, FAILED}
+状态转换规则：
+WAITING → CONSULTING：医生接受问诊
+CONSULTING → FINISHED：医生主动结束或10分钟计时器到期
+WAITING/CONSULTING → TIMEOUT：等待超时或静默超时
+CONSULTING → FAILED：医生拒绝开方
+定时器机制：
+问诊10分钟倒计时：会话开始后启动，到期自动调用forceEndSession()，保存聊天记录，状态转为FINISHED
+处方5分钟倒计时：问诊结束后启动，医生未开方则触发handlePrescriptionTimeout()，状态转为FAILED，释放预约的医生资源
+
+匹配算法：
+算法：findAvailableDoctor(department, patientId)
+输入：科室，患者ID
+处理：
+  1. 查询DoctorRepository获取该科室所有在线医生列表
+  2. 排除当前已有5个排队患者的医生（负载上限）
+  3. 按医生评分、响应速度、历史问诊量排序
+  4. 选择排名第一的医生，获取其当前队列长度
+  5. 计算预计等待时间 = 队列长度 × 平均每位患者问诊时长（预设3分钟）
+  6. 生成排队号，将patientId加入该医生队列
+  7. 返回医生信息与QueueInfo
+输出：Doctor对象及预计等待时长
+异常：若无可用医生，抛出NoAvailableDoctorException
+
+排队队列设计：
+采用Redis List实现，Key格式为queue:department:doctorId
+患者入队时LPUSH，出队时RPOP，保证FIFO顺序
+队列长度超过20时，新患者自动分配至其他科室医生或提示"当前排队人数较多"
+
+4. 接口设计
+4.1 内部接口
+PatientInfoService接口
+public interface PatientInfoService {
+    // 创建患者信息
+    Patient createPatientInfo(String userId, PatientInfoDTO info) 
+        throws IdCardInvalidException, AgreementNotConfirmedException;
+    
+    // 验证身份证
+    ValidationResult validateIdCard(String idCard);
+    
+    // 验证体重范围
+    ValidationResult validateWeight(BigDecimal weight);
+    
+    // 上传复诊凭证
+    List<String> uploadEvidence(String patientId, MultipartFile[] files) 
+        throws FileSizeExceededException, FileFormatInvalidException;
+    
+    // 确认问诊协议
+    void confirmAgreement(String patientId);
+}
+
+ConsultationService接口
+public interface ConsultationService {
+    // 匹配医生
+    Doctor matchDoctor(Patient patient, String department);
+    
+    // 创建会话
+    ConsultationSession createSession(String patientId, String doctorId);
+    
+    // 发送消息
+    void sendMessage(String sessionId, ChatMessage message);
+    
+    // 结束会话
+    void endSession(String sessionId);
+    
+    // 获取会话状态
+    ConsultationSession getSession(String sessionId);
+}
+
+PrescriptionService接口
+public interface PrescriptionService {
+    // 请求开具处方
+    void requestPrescription(String sessionId);
+    
+    // 接收处方（回调）
+    Prescription receivePrescription(String sessionId, String imageUrl, String auditOpinion);
+    
+    // 处理开方超时
+    void handlePrescriptionTimeout(String sessionId);
+    
+    // 推送处方至订单
+    void pushToOrder(String orderId, String prescriptionId);
+}
+4.2 外部接口调用
+互联网医院接口
+提交审核材料：POST /api/material/submit
+参数：patientId, idCard, diseaseDesc, evidenceUrls, agreementFlag
+返回：materialId, submitTime
+获取审核结果：GET /api/audit/result/{materialId}
+返回：status, prescriptionUrl, doctorId, auditOpinion
+
+5. 异常处理机制、
+异常场景	检测方式	处理策略	日志记录	用户提示
+身份信息校验失败	正则表达式验证身份证格式	阻断提交，返回具体错误字段	WARN级别，记录失败原因	"身份证号格式不正确"
+复诊凭证不合规	AI识别图片内容，检测是否含处方元素	人工复核队列，延迟审核	INFO级别，标记可疑记录	"材料审核中，请耐心等待"
+医生离线	WebSocket心跳检测断开	自动转入队列，推送排队信息	INFO级别，记录医生状态变更	"医生暂时离线，已为您安排排队"
+开方超时	TimerManager触发超时事件	自动关闭会话，释放医生资源，触发退款	ERROR级别，记录sessionId与doctorId	"问诊结束，医生未按时开方，已自动取消"
+图片上传失败	捕获IOException	重试2次，仍失败提示用户重新上传	ERROR级别，记录文件大小与网络状态	"图片上传失败，请检查网络后重试"

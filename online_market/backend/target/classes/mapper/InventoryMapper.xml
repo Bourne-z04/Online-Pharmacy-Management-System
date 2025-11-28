@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.pharmacy.online.mapper.InventoryMapper">
+    
+    <!-- 扣减库存（乐观锁） -->
+    <update id="deductStock">
+        UPDATE inventory 
+        SET available_stock = available_stock - #{quantity},
+            frozen_stock = frozen_stock + #{quantity},
+            version = version + 1
+        WHERE product_id = #{productId} 
+          AND available_stock >= #{quantity}
+          AND version = #{version}
+    </update>
+    
+    <!-- 冻结库存 -->
+    <update id="freezeStock">
+        UPDATE inventory 
+        SET available_stock = available_stock - #{quantity},
+            frozen_stock = frozen_stock + #{quantity},
+            version = version + 1
+        WHERE product_id = #{productId} 
+          AND available_stock >= #{quantity}
+          AND version = #{version}
+    </update>
+    
+    <!-- 解冻库存 -->
+    <update id="unfreezeStock">
+        UPDATE inventory 
+        SET available_stock = available_stock + #{quantity},
+            frozen_stock = frozen_stock - #{quantity},
+            version = version + 1
+        WHERE product_id = #{productId} 
+          AND frozen_stock >= #{quantity}
+          AND version = #{version}
+    </update>
+</mapper>
+

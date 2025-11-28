@@ -1,0 +1,75 @@
+<!-- 首页 -->
+<view class="container">
+  <!-- 搜索栏 -->
+  <view class="search-bar">
+    <view class="search-input" bindtap="goToSearch">
+      <image class="search-icon" src="/images/search.png"></image>
+      <text class="search-placeholder">搜索药品名称、症状</text>
+    </view>
+  </view>
+
+  <!-- 轮播图 -->
+  <swiper class="banner-swiper" indicator-dots="true" autoplay="true" interval="3000" duration="500">
+    <swiper-item wx:for="{{banners}}" wx:key="id">
+      <image class="banner-image" src="{{item.image}}" mode="aspectFill"></image>
+    </swiper-item>
+  </swiper>
+
+  <!-- 分类导航 -->
+  <view class="category-nav">
+    <view class="category-item" wx:for="{{categories}}" wx:key="id" bindtap="goToCategory" data-id="{{item.id}}">
+      <image class="category-icon" src="{{item.icon}}"></image>
+      <text class="category-name">{{item.name}}</text>
+    </view>
+  </view>
+
+  <!-- 热销商品 -->
+  <view class="section">
+    <view class="section-header">
+      <text class="section-title">热销商品</text>
+      <text class="section-more" bindtap="goToCategory">更多 ></text>
+    </view>
+    <view class="product-list">
+      <view class="product-item" wx:for="{{hotProducts}}" wx:key="id" bindtap="goToProductDetail" data-id="{{item.id}}">
+        <image class="product-image" src="{{item.mainImage}}" mode="aspectFit"></image>
+        <view class="product-name">{{item.productName}}</view>
+        <view class="product-spec">{{item.specification}}</view>
+        <view class="product-footer">
+          <view class="product-price">
+            <text class="price-symbol">¥</text>
+            <text class="price-value">{{item.price}}</text>
+          </view>
+          <view class="product-cart-btn" catchtap="addToCart" data-id="{{item.id}}">
+            <image class="cart-icon" src="/images/cart-add.png"></image>
+          </view>
+        </view>
+        <view class="prescription-tag" wx:if="{{item.isPrescription}}">处方药</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 推荐商品 -->
+  <view class="section">
+    <view class="section-header">
+      <text class="section-title">为你推荐</text>
+    </view>
+    <view class="product-list">
+      <view class="product-item" wx:for="{{recommendProducts}}" wx:key="id" bindtap="goToProductDetail" data-id="{{item.id}}">
+        <image class="product-image" src="{{item.mainImage}}" mode="aspectFit"></image>
+        <view class="product-name">{{item.productName}}</view>
+        <view class="product-spec">{{item.specification}}</view>
+        <view class="product-footer">
+          <view class="product-price">
+            <text class="price-symbol">¥</text>
+            <text class="price-value">{{item.price}}</text>
+          </view>
+          <view class="product-cart-btn" catchtap="addToCart" data-id="{{item.id}}">
+            <image class="cart-icon" src="/images/cart-add.png"></image>
+          </view>
+        </view>
+        <view class="prescription-tag" wx:if="{{item.isPrescription}}">处方药</view>
+      </view>
+    </view>
+  </view>
+</view>
+

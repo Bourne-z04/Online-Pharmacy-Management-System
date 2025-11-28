@@ -1,0 +1,61 @@
+层次体系结构
+
+层次体系结构通过清晰的层级划分将系统功能分解为独立构件。这种设计降低了层与层之间的依赖，使得开发团队可以并行开发和测试不同模块，符合项目紧张的交付进度和有限的预算约束。各层之间通过标准化接口进行交互，增强了系统构件的可替换性。采用统一的通信协议和数据格式支持标准化设计与合规要求与外部实体集成。
+
+绘图
+层1：应用层
+
+构件1：商品服务（Product Service）
+构件2：订单服务（Order Service）
+构件3：库存服务（Inventory Service）
+构件4：处方服务（Prescription Service）
+构件5：支付服务适配器（Payment Adapter）
+构件6：物流服务（Logistics Service）
+构件7：售后服务（After-sales Service）
+构件8：用户与认证服务（User/Auth Service）
+构件9：通知与消息服务（Notification Service）
+构件10：搜索与推荐服务（Search/Recommendation Service）
+
+层2：表示层
+
+构件11：微信小程序前端（C端）
+构件12：后台管理系统（B端 Admin Console）
+构件13：API 网关 / BFF（Backend for Frontend）
+构件14：统一身份认证入口（Auth UI）
+
+层3：会话层
+
+构件15：会话管理器（Session Manager）
+构件16：业务流程编排器（Orchestrator / Saga Coordinator）
+构件17：权限控制与审计组件（Access & Audit）
+
+层4：传输层
+
+构件18：HTTP/HTTPS 接口（REST）
+构件19：gRPC 服务接口
+构件20：消息队列（MQ：Kafka/RabbitMQ/RocketMQ）
+构件21：对象存储链接传输模块（OSS/S3 Pre-signed URL）
+
+层5：网络层
+
+构件22：负载均衡（Load Balancer）
+构件23：服务发现（Service Discovery）
+构件24：服务网格（Service Mesh）
+构件25：网络访问控制（VPC/ACL）
+
+层6：数据链路层
+
+构件26：关系型数据库（MySQL/PostgreSQL）
+构件27：缓存数据库（Redis）
+构件28：全文检索引擎（Elasticsearch）
+构件29：对象存储（OSS/S3）
+构件30：消息持久化存储（MQ Storage）
+
+层7：物理层
+
+构件31：容器运行环境（Kubernetes / Docker）
+构件32：CI/CD 部署平台
+构件33：日志与监控平台（ELK / Prometheus / Grafana）
+构件34：密钥管理与安全设施（KMS / WAF）
+构件35：备份与容灾资源（Backup & DR）
+
